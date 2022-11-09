@@ -1,0 +1,207 @@
+---
+title: "Stat.Analysis"
+author: "Dan"
+date: "2022-10-27"
+output: html_document
+---
+
+```{r load libraries}
+library(dplyr) # for data munging 
+library(foreign) # we'll need to import the .SAV file into R
+library(ggplot2) # visualization : better aesthetic add-ons to effect plots
+library(effects) # for plotting the marginal effects of variables 
+library(olsrr) # for model diagnostics 
+library(tidyr)
+library(DT)
+library(patchwork)
+library(ggeffects)
+library(oddsratio)
+library(epiDisplay)
+```
+
+The data file is an spss file, we'll use foreign package's read.spss function to read it into R. 
+
+```{r data import}
+wdata <- read.spss("data/KDHS 2014 WOMEN DATA V003.SAV",use.value.labels=F,to.data.frame=T)
+```
+
+Run a logistic model on the data with the response variable being contraceptive_use.  
+
+```{r}
+
+# # fit the model 
+# model.glm <- glm(contraceptive_use ~ age_bins_new+age_at_first_birth+age_at_first_sex+edu_level+religion+hh_size+gender_of_hh_head+literacy_level+wealth_index+child_ever_born+marital_status, data=wdata, family=binomial(link='logit'))
+# 
+# # understanding the fitted model  
+# summary(model.glm)   
+
+
+```
+
+# Automation  
+We can make a function that takes in two parameters, the response variable and the data, runs the model and checks if the p-values are significant or not then prints a list of two items, significant variables and those that are not.  
+
+```{r}
+
+# stud <- read.csv("data/student_performance.csv")
+# stud <- dplyr::select(stud, c(traveltime,studytime,famsup,paid))
+# 
+# paid <- stud$paid
+# 
+# mtdata <- mtcars
+# row.names(mtdata) <- NULL
+# vs <- mtdata$vs
+# var2 <- "vs"
+# 
+# irisdata <- iris %>% filter(Species %in% c("setosa","versicolor"))
+# irisdata <- irisdata %>% mutate(Species=case_when(
+#    Species == "setosa" ~ 1,
+#    Species == "versicolor" ~ 0,
+#    TRUE ~ as.numeric(Species)
+#   ))
+# 
+# Species <- irisdata$Species
+
+wdata <- wdata %>% dplyr::select(c(contraceptive_use,age_bins_new,age_at_first_birth,age_at_first_sex,edu_level,religion,
+                                   hh_size,gender_of_hh_head,literacy_level,wealth_index,child_ever_born,marital_status))
+
+wdata$gender_of_hh_head <- as.factor(wdata$gender_of_hh_head)
+
+contraceptive_use <- wdata$contraceptive_use
+varr <- "contraceptive_use"
+
+
+auto_model <- function(dat,rvar){
+  
+  response_var <- eval(as.name(rvar))
+  
+   ndat <- dplyr::select(dat, -all_of(rvar))
+  theModel <- glm(response_var ~ ., data=ndat, family=binomial(link='logit'))
+  output.model <- summary(theModel)
+  pv <- coef(summary(theModel))[,'Pr(>|z|)'] 
+  OR <-  exp(cbind(coef(theModel), confint(theModel))) # calculating the odds ratio
+  return(list(output.model,pv,theModel,OR))
+  
+}
+
+glmModel <- auto_model(dat=wdata, rvar = varr) 
+
+
+
+
+# auto_model(dat=mtdata, rvar = 'vs')
+# auto_model(dat=irisdata, rvar = "Species")
+# auto_model(dat = stud, rvar = 'paid')
+```
+
+
+# Evaluating the variables to flag those that are significant and otherwise 
+
+For the model that was run the significance of each of the variables is as per the table below
+```{r}
+
+pvalues <- glmModel[[2]] %>% as.data.frame()
+pvalues$variable <- rownames(pvalues)
+names(pvalues)[1] <- "pval"
+rownames(pvalues) <- NULL
+
+# The following table highlights variables which are significant and those that are not
+pvalues <- pvalues %>% mutate(significance = case_when(
+  pval < 0.05 ~ "significant",
+  pval >= 0.05 ~ "Insignificant"
+))
+
+
+datatable(pvalues)
+
+```
+
+# Visualizing the effect of variables on the outcome 
+```{r}
+
+themodel.out <- glmModel[[3]]
+predictors <- colnames(wdata)
+predictors <- predictors[predictors != varr]
+
+plot(ggpredict(themodel.out,terms = "gender_of_hh_head"))
+
+do.call(patchwork::wrap_plots, lapply(predictors, function(x) {
+  print(plot(ggpredict(themodel.out,eval(x)), show.title=FALSE, colors="bw"))
+})) -> plott
+
+plott
+
+```
+
+# Odds ratio and Confidence intervals of the model 
+```{r}
+
+ # the package epiDisplay has a function logistic.display the calculates the Odds ratio and the CI's
+ epiDisplay::logistic.display(glmModel[[3]])  
+
+## Below is an alternative approach but note that it gives different values from the results of epiDisplay package
+## You can uncomment the two lines below and run to see the results. 
+ # theOddsRatio <- glmModel[[4]] %>% as.data.frame()
+ # datatable(theOddsRatio)
+```
+
+
+
+# Model diagnostics 
+## Multicollinearity  
+Variance inflation factors measure the inflation in the variances of the parameter estimates due to collinearities that exist among the predictors. It is a measure of how much the variance of the estimated regression coefficient βk is “inflated” by the existence of correlation among the predictor variables in the model. A VIF of 1 means that there is no correlation among the kth predictor and the remaining predictor variables, and hence the variance of βk is not inflated at all. The general rule of thumb is that VIFs exceeding 4 warrant further investigation, while VIFs exceeding 10 are signs of serious multicollinearity requiring correction.
+
+```{r} 
+
+multicol <- car::vif(themodel.out) %>% as.data.frame()
+
+multicol$variable <- rownames(multicol)
+names(multicol)[1] <- "vif"
+rownames(multicol) <- NULL
+
+# The following table highlights vif evaluation status of the variables and flags them into 3 levels : Pass,investigate,correct 
+multicol <- multicol %>% mutate(significance = case_when(
+  vif < 4 ~ "Pass",
+  vif >= 4 & vif < 10 ~ "Investigate",
+  vif >= 10 ~ "Correct"
+))
+
+datatable(multicol)
+```
+
+## Linearity  
+Well well, need to see how to automate the selection of continous variables seeing that even categorical are represented as numeric. This can be done at the data cleaning/transformation.  
+
+```{r}
+wdata <- na.omit(wdata)
+probabilities <- predict(themodel.out, type = "response")
+# Select only numeric predictors
+mydata <- wdata %>% mutate(probabilities = predict(themodel.out, type = "response")) %>%
+  dplyr::select_if(is.numeric) 
+
+ predictors <- colnames(mydata)
+ predictors <- predictors[! predictors %in% c(varr,"probability")]
+
+# Bind the logit and tidying the data for plot
+mydata2 <- mydata %>%
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  pivot_longer(cols = all_of(predictors), names_to = "predictors",values_to = "predictor.value")
+
+ggplot(mydata2, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") + 
+  theme_bw() + 
+  facet_wrap(~predictors, scales = "free_y")
+```
+
+## Influential variables 
+```{r}
+#library(broom)
+
+par(mfrow = c(1,2))
+plot(themodel.out, which =5, id.n = 3) # residual vs leverage plot
+plot(themodel.out, which =4, id.n = 3) # 4. A plot of Cook's distances to spot out the outliers
+
+
+```
+

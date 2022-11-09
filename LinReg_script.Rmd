@@ -1,0 +1,136 @@
+---
+title: "Automating linear regression"
+author: "Dan"
+date: "2022-10-27"
+output: html_document
+---
+
+```{r load libraries}
+library(dplyr) # for data munging 
+library(foreign) # we'll need to import the .SAV file into R
+library(ggplot2) # visualization : better aesthetic add-ons to effect plots
+library(effects) # for plotting the marginal effects of variables 
+#library(olsrr) # for model diagnostics 
+library(tidyr)
+library(cowplot)
+library(patchwork)
+library(DT)
+library(ggeffects)
+```
+
+Import the data into R 
+
+```{r data import}
+mtcarss <- mtcars
+```
+
+Run a logistic model on the data with the response variable being contraceptive_use.  
+
+```{r data prepping }
+mtcarss$vs <- factor(mtcarss$vs)
+mtcarss$am <- factor(ifelse(mtcarss$am == 0, "automatic", "manual"))
+mtcarss$gear <- factor(mtcarss$gear)
+mtcarss$carb <- factor(mtcarss$carb)
+
+row.names(mtcarss) <- NULL
+
+```
+
+# Automation  
+We can make a function that takes in two parameters, the response variable and the data, runs the model and checks if the p-values are significant or not then prints a list of two items, significant variables and those that are not.  
+
+```{r}
+
+# define the response variable 
+resvar <- "mpg"
+mpg <- mtcarss$mpg
+
+reg_auto_model <- function(dat,rvar){
+  
+  res_var <- eval(as.name(rvar))
+  ndat <- dplyr::select(dat, -all_of(rvar))
+
+  regModel <- lm(res_var ~ ., data=ndat)
+  #reglogmodel <- lm(log(mpg) ~ ., data = dat)
+  
+  return(list(summary(regModel),coef(summary(regModel))[,'Pr(>|t|)'],regModel,reglogmodel))
+  
+}
+
+regressionModel <- reg_auto_model(dat=mtcarss, rvar = resvar) 
+regressionModel[[2]]
+
+```
+
+
+# Evaluating the variables to flag those that are significant and otherwise 
+
+```{r}
+
+regpvalues <- regressionModel[[2]] %>% as.data.frame()
+regpvalues$variable <- rownames(regpvalues)
+names(regpvalues)[1] <- "pval"
+rownames(regpvalues) <- NULL
+
+# The following table highlights variables which are significant and those that are not
+regpvalues <- regpvalues %>% mutate(significance = case_when(
+  pval < 0.5 ~ "significant",
+  pval >= 0.5 ~ "Insignificant"
+))
+
+datatable(regpvalues)
+
+```
+
+# Visualizing the effect of variables on the outcome 
+```{r}
+regmodel.out <- regressionModel[[3]]
+regpredictors <- colnames(mtcarss)
+regpredictors <- regpredictors[regpredictors != resvar]
+
+do.call(patchwork::wrap_plots, lapply(regpredictors, function(x) {
+  print(plot(ggpredict(regmodel.out,eval(x)), show.title=FALSE, colors="bw"))
+})) -> regplot
+
+regplot
+
+```
+
+# Model diagnostics  
+
+Regression assumptions
+
+Linear regression makes several assumptions about the data, such as :
+
+    Linearity of the data. The relationship between the predictor (x) and the outcome (y) is assumed to be linear.
+    Normality of residuals. The residual errors are assumed to be normally distributed.
+    Homogeneity of residuals variance. The residuals are assumed to have a constant variance (homoscedasticity)
+    Independence of residuals error terms.
+
+You should check whether or not these assumptions hold true. Potential problems include:
+
+    Non-linearity of the outcome - predictor relationships
+    Heteroscedasticity: Non-constant variance of error terms.
+    Presence of influential values in the data that can be:
+        Outliers: extreme values in the outcome (y) variable
+        High-leverage points: extreme values in the predictors (x) variable
+
+All these assumptions and potential problems can be checked by producing some diagnostic plots visualizing the residual errors.
+
+```{r}
+
+par(mfrow = c(2, 2))
+plot(regmodel.out)
+
+```
+
+The diagnostic plots show residuals in four different ways:
+
+    Residuals vs Fitted. Used to check the linear relationship assumptions. A horizontal line, without distinct patterns is an indication for a linear relationship, what is good.
+
+    Normal Q-Q. Used to examine whether the residuals are normally distributed. It’s good if residuals points follow the straight dashed line.
+
+    Scale-Location (or Spread-Location). Used to check the homogeneity of variance of the residuals (homoscedasticity). Horizontal line with equally spread points is a good indication of homoscedasticity. 
+
+    Residuals vs Leverage. Used to identify influential cases, that is extreme values that might influence the regression results when included or excluded from the analysis. 
+

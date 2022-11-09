@@ -1,0 +1,2 @@
+# Automating models
+The idea of this project is to automate machine learning models in such a way that the user feeds it with the data and the response variable and the auto_model runs and gives back the results. I have done the implementation on logistic and linear regression to begin with. 
